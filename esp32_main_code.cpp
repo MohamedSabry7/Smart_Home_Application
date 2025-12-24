@@ -6,11 +6,20 @@
 
 #include <WiFi.h>
 #include <WebServer.h>
+#include <LiquidCrystal.h> // Add this library
+
+// Map the pins: rs=19, en=23, d4=18, d5=5, d6=4, d7=2
+const int rs = 19, en = 23, d4 = 18, d5 = 5, d6 = 4, d7 = 2;
+LiquidCrystal lcd(rs, en, d4, d5, d6, d7);
+
+
+const int DIP_SWITCH_PIN = 32; // Pin for your physical switch
+bool lampAppReq = false;       // To track the App's request separately
 
 // --- Wi-Fi Configuration ---
 // !! CHANGE THESE TO YOUR NETWORK DETAILS !!
-const char* WIFI_SSID = "WE8B19F7";
-const char* WIFI_PASSWORD = "F707F21F";
+const char* WIFI_SSID = "Seneca";
+const char* WIFI_PASSWORD = "Se@@1234";
 const int SERVER_PORT = 80;
 
 // Create a WebServer on port 80
@@ -28,6 +37,7 @@ const int BUZZER_PIN = 25;       // GPIO25 - safe output pin
 // Note: ADC2 pins cannot be used when Wi-Fi is active!
 // !! IMPORTANT: Verify your NTC and resistor values !!
 const int NTC_PIN = 34;          // GPIO34 (ADC1_CH6)
+const float V_REF = 3.3;
 const float NOMINAL_RESISTANCE = 100000;    // 100k Ohm NTC (at 25°C) - CHANGE if your NTC is different!
 const float NOMINAL_TEMPERATURE = 25;       // 25C 
 const int BETA_COEFFICIENT = 3950;          // B-value for NTC
@@ -63,6 +73,7 @@ void handleAlarmOff();
 void handleStatus();
 void handleNotFound();
 void addCORSHeaders();
+void updateLCD(float temp, bool doorOpen, bool lampOn);
 
 
 void setup() {
@@ -74,14 +85,19 @@ void setup() {
     Serial.println("============================================\n");
 
     // Initialize Actuator Pins and set them OFF (HIGH for Active LOW relays)
+
     pinMode(LAMP_RELAY_PIN, OUTPUT);
     pinMode(PLUG_RELAY_PIN, OUTPUT);
     pinMode(BUZZER_PIN, OUTPUT);
     digitalWrite(LAMP_RELAY_PIN, HIGH);   // Relay OFF (Active LOW)
     digitalWrite(PLUG_RELAY_PIN, HIGH);   // Relay OFF (Active LOW)
     digitalWrite(BUZZER_PIN, LOW);        // Buzzer OFF
+    lcd.begin(16, 2);           // Initialize 16x2 LCD
+    lcd.print("System Boot..."); // Initial message
 
     // Initialize Sensor Pins
+
+    pinMode(DIP_SWITCH_PIN, INPUT_PULLUP); // Use internal resistor
     pinMode(DOOR_SENSOR_PIN, INPUT_PULLUP);
     previousDoorState = digitalRead(DOOR_SENSOR_PIN);
 
@@ -141,6 +157,11 @@ void loop() {
     // 2. Read Sensors
     float currentTemp = readNTC();
     bool currentDoorState = digitalRead(DOOR_SENSOR_PIN);
+    bool currentDipState = digitalRead(DIP_SWITCH_PIN); // Read physical switch
+    static unsigned long lastLCDUpdate = 0;
+
+    bool finalLampState = lampRelayState ^ currentDipState; 
+    digitalWrite(LAMP_RELAY_PIN, finalLampState ? LOW : HIGH);
     
     // 3. Temperature Alarm Logic (using settable threshold)
     bool shouldAlarm = currentTemp > alarmTempThreshold;
@@ -169,7 +190,11 @@ void loop() {
 
         lastStatusUpdateTime = millis();
     }
-
+    
+    //if (millis() - lastLCDUpdate > 1000) {
+        updateLCD(currentTemp, currentDoorState, finalLampState);
+        //lastLCDUpdate = millis();
+    //}
     delay(10);  // Small delay for stability
 }
 
@@ -231,6 +256,24 @@ float readNTC() {
     return temp_C;
 }
 
+void updateLCD(float temp, bool doorOpen, bool lampOn) {
+    // Line 1: Temperature
+    lcd.setCursor(0, 0);
+    lcd.print("Temp: ");
+    lcd.print(temp, 1);
+    lcd.print((char)223); // Degree symbol
+    lcd.print("C    ");
+
+    // Line 2: Door (D) and Lamp (L)
+    lcd.setCursor(0, 1);
+    // Door logic: In your code HIGH=OPEN
+    lcd.print("D:");
+    lcd.print(doorOpen ? "OPEN " : "CLSD ");
+    
+    lcd.print("| L:");
+    lcd.print(lampOn ? "ON  " : "OFF ");
+}
+
 
 // --- HTTP Request Handler Functions ---
 
@@ -254,7 +297,7 @@ void handleRoot() {
 
 void handleLampOn() {
     lampRelayState = true;
-    digitalWrite(LAMP_RELAY_PIN, LOW);  // Active LOW relay ON
+    //digitalWrite(LAMP_RELAY_PIN, LOW);  // Active LOW relay ON
     Serial.println("> Command received: LAMP_ON");
     
     addCORSHeaders();
@@ -263,7 +306,7 @@ void handleLampOn() {
 
 void handleLampOff() {
     lampRelayState = false;
-    digitalWrite(LAMP_RELAY_PIN, HIGH);  // Active LOW relay OFF
+    //digitalWrite(LAMP_RELAY_PIN, HIGH);  // Active LOW relay OFF
     Serial.println("> Command received: LAMP_OFF");
     
     addCORSHeaders();
